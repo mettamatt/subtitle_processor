@@ -1,6 +1,6 @@
 # Subtitle Processor
 
-Subtitle Processor is a Python script that processes `.srt` subtitle files. It adjusts the timings and text length of each subtitle based on predefined constants. It also applies an initial offset (lead-in offset) to the first subtitle. The script loosely follows the guidelines of the (Netflix Timed Text Style Guide)[https://partnerhelp.netflixstudios.com/hc/en-us/articles/215758617-Timed-Text-Style-Guide-General-Requirements]
+Subtitle Processor is a Python script that processes `.srt` subtitle files. It adjusts the timings and text length of each subtitle based on predefined constants. It also applies an initial offset (lead-in offset) to all the subtitles. The script loosely follows the guidelines of the [Netflix Timed Text Style Guide](https://partnerhelp.netflixstudios.com/hc/en-us/articles/215758617-Timed-Text-Style-Guide-General-Requirements).
 
 ## Requirements
 
@@ -20,20 +20,19 @@ pip install argparse pysrt
 
 ## Usage
 
-To use this script, you need to provide the path to the `.srt` file to be processed as an argument. You can also optionally provide a lead-in offset (in seconds) that will be applied to the first subtitle in the `.srt` file.
+To use this script, you need to provide the path to the `.srt` file to be processed as an argument. You can also optionally provide a lead-in offset (in seconds) that will be applied to the first subtitle in the `.srt` file. If you want to process multiple files, you can provide the paths of multiple `.srt` files.
 
 Here is an example:
 
 ```bash
-python subtitle_processor.py /path/to/file.srt --lead-in-offset 1.5
+python subtitle_processor.py /path/to/file1.srt /path/to/file2.srt --lead-in-offset 1.5
 ```
 
 If the lead-in offset is not provided, the default value of 0.0 seconds is used.
 
 ## Output
 
-The script will create a new `.srt` file with adjusted subtitles. The new file will be saved in the same directory as the input file, preserving the original file. 
-
+The script will create new `.srt` files with adjusted subtitles for each input file. The new files will be saved in the same directory as the corresponding input files, preserving the original files. 
 
 For example:
 
@@ -49,7 +48,7 @@ Will output:
 
 This signifies that the processing has been completed and the adjusted `.srt` file is available at `/path/to/file.adjusted.srt`.
 
-Remember that the script does not delete or modify the original `.srt` file, it merely reads it and creates a new, adjusted version. This way, your original subtitle data remains intact and unmodified.
+Remember that the script does not delete or modify the original `.srt` files, it merely reads them and creates new, adjusted versions. This way, your original subtitle data remains intact and unmodified.
 
 ## Constants
 

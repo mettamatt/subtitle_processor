@@ -127,18 +127,19 @@ def process_srt_file(file_name, offset):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="This script processes .srt subtitle files. It adjusts the timings and text length of each subtitle based on predefined constants. It also applies an initial offset to all subtitles.")
-    parser.add_argument('file', type=str, help='The path to the .srt file to be processed.')
+    parser.add_argument('files', type=str, nargs='*', help='The paths to the .srt files to be processed.')
     parser.add_argument('-l', '--lead-in-offset', type=float, default=0.0, help='The initial offset (in seconds) to be applied to the first subtitle in the .srt file. If not provided, the default is 0.0.')
 
     args = parser.parse_args()
 
     try:
-        file_path = args.file
+        file_paths = args.files
         lead_in_offset = args.lead_in_offset
         if lead_in_offset < 0:
             raise ValueError("Error: Lead-in offset cannot be negative.")
-        result = process_srt_file(file_path, lead_in_offset)
-        print(result)
+        for file_path in file_paths:
+            result = process_srt_file(file_path, lead_in_offset)
+            print(result)
     except Exception as e:
         print(e)
         sys.exit(1)
