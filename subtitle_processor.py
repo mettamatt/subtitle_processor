@@ -108,6 +108,9 @@ def adjust_text(subtitle, max_len=MAX_TEXT_LEN):
     return subtitle
 
 def process_srt_file(file_name, offset):
+    if file_name.endswith('.adjusted.srt'):
+        print(f"The file {file_name} appears to have already been processed. Skipping.")
+        return file_name
     try:
         subtitles = pysrt.open(file_name)
     except FileNotFoundError:
@@ -120,6 +123,8 @@ def process_srt_file(file_name, offset):
     subtitles = apply_lead_in_offset(subtitles, lead_in_offset)
 
     adjusted_subtitles = []
+    adjusted_counter = 0
+    total_subtitles = len(subtitles)
     
     i = 0
     while i < len(subtitles) - 1:
@@ -133,7 +138,7 @@ def process_srt_file(file_name, offset):
 
         if merged_subtitle is not None:
             subtitle = merged_subtitle
-            i += 1  # Skip the next subtitle
+            i += 1 
 
         original_start = subtitle.start
         original_end = subtitle.end
@@ -143,19 +148,22 @@ def process_srt_file(file_name, offset):
         subtitle = adjust_text(subtitle)
 
         if original_start != subtitle.start or original_end != subtitle.end or original_text != subtitle.text:
-            print(f"Subtitle {subtitle.index} has been adjusted:")
-            print(f"Original: Start: {original_start}, End: {original_end}, Text: {original_text}")
-            print(f"Adjusted: {subtitle}")
+            adjusted_counter += 1
 
         adjusted_subtitles.append(subtitle)
         i += 1
 
-    adjusted_subtitles = apply_transition_gap(adjusted_subtitles)  # Apply transition gap here
-    adjusted_subtitles.append(adjust_times(subtitles[-1], subtitles[-1], apply_gap=False))  # Do not apply transition gap here
-
+    adjusted_subtitles = apply_transition_gap(adjusted_subtitles) 
+    adjusted_subtitles.append(adjust_times(subtitles[-1], subtitles[-1], apply_gap=False))
 
     new_file_name = file_name.rsplit('.', 1)[0] + '.adjusted.srt'
     pysrt.SubRipFile(adjusted_subtitles).save(new_file_name, encoding='utf-8')
+
+    adjusted_percentage = (adjusted_counter / total_subtitles) * 100
+    print(f"Total subtitles: {total_subtitles}")
+    print(f"Total subtitles adjusted: {adjusted_counter}")
+    print(f"Percentage of subtitles adjusted: {adjusted_percentage:.2f}%")
+
     return new_file_name
 
 if __name__ == "__main__":
