@@ -44,7 +44,7 @@ def adjust_times(subtitle, next_subtitle):
     elif duration > MAX_DURATION_SECONDS:
         end_time = start_time + MAX_DURATION
     
-    if end_time >= next_start_time:  # make sure the gap is respected
+    if end_time >= next_start_time:  
         end_time = next_start_time - TRANSITION_GAP
 
     subtitle.end = end_time
