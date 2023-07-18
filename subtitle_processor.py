@@ -56,7 +56,7 @@ def adjust_text(subtitle, max_len=MAX_TEXT_LEN):
     if len(subtitle.text) <= max_len:
         return subtitle
 
-    sentences = re.split(r'(?<=[.,:;!?])\s+', subtitle.text)
+    sentences = re.split(r'(?<=[.!?])\s+', subtitle.text)
     split_idx = -1
 
     for i, sentence in enumerate(sentences):
