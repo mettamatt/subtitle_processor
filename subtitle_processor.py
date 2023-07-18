@@ -9,6 +9,7 @@ MIN_DURATION = pysrt.srttime.SubRipTime(0, 0, 0, 833)
 MIN_DURATION_SECONDS = 5/6
 MAX_DURATION = pysrt.srttime.SubRipTime(0, 0, 7, 0)
 MAX_TEXT_LEN = 42
+MIN_TEXT_LEN = 30
 TRANSITION_GAP = pysrt.srttime.SubRipTime(0, 0, 0, 120)
 
 # Convert SubRipTime to seconds
@@ -31,8 +32,30 @@ def apply_lead_in_offset(subtitles, offset):
         subtitles[0].start.shift(seconds=offset)
     return subtitles
 
+def merge_subtitles(subtitle, next_subtitle):
+    gap = subriptime_total_seconds(next_subtitle.start) - subriptime_total_seconds(subtitle.end)
+    if gap < 1:  # If the gap is less than 1 second
+        if len(subtitle.text + " " + next_subtitle.text) <= MIN_TEXT_LEN:
+            new_subtitle = pysrt.SubRipItem(index=subtitle.index, start=subtitle.start, end=next_subtitle.end, text=subtitle.text + " " + next_subtitle.text)
+            return new_subtitle
+    return None
+
+def apply_transition_gap(subtitles):
+    for i in range(len(subtitles) - 1):
+        subtitle = subtitles[i]
+        next_subtitle = subtitles[i + 1]
+        
+        if subtitle.end + TRANSITION_GAP < next_subtitle.start:
+            subtitle.end += TRANSITION_GAP
+        else:
+            subtitle.end = next_subtitle.start - TRANSITION_GAP
+
+        subtitles[i] = subtitle
+
+    return subtitles
+
 # Main Functions
-def adjust_times(subtitle, next_subtitle):
+def adjust_times(subtitle, next_subtitle, apply_gap=True):
     start_time = subtitle.start
     end_time = subtitle.end
     next_start_time = next_subtitle.start
@@ -40,11 +63,11 @@ def adjust_times(subtitle, next_subtitle):
     duration = subriptime_total_seconds(end_time - start_time)
     
     if duration < MIN_DURATION_SECONDS:
-        end_time = min(start_time + MIN_DURATION, next_start_time - TRANSITION_GAP)
+        end_time = min(start_time + MIN_DURATION, next_start_time - TRANSITION_GAP if apply_gap else next_start_time)
     elif duration > MAX_DURATION_SECONDS:
         end_time = start_time + MAX_DURATION
     
-    if end_time >= next_start_time:  
+    if apply_gap and end_time >= next_start_time:  
         end_time = next_start_time - TRANSITION_GAP
 
     subtitle.end = end_time
@@ -52,7 +75,7 @@ def adjust_times(subtitle, next_subtitle):
 
 def adjust_text(subtitle, max_len=MAX_TEXT_LEN):
     subtitle.text = replace_ellipses(subtitle.text)
-    
+
     if len(subtitle.text) <= max_len:
         return subtitle
 
@@ -70,7 +93,7 @@ def adjust_text(subtitle, max_len=MAX_TEXT_LEN):
         subtitle.text = subtitle.text[:max_len] + '\n' + subtitle.text[max_len:]
 
     lines = subtitle.text.split('\n')
-    while len(lines) > 2 or (len(lines) == 2 and len(lines[0].split()) <= 2):
+    while len(lines) > 2 or (len(lines) == 2 and len(lines[0].split()) <= 3):
         if len(lines) == 2:
             lines[0] = lines[0] + ' ' + lines[1].split(' ', 1)[0]
             lines[1] = ' '.join(lines[1].split(' ', 1)[1:])
@@ -80,7 +103,7 @@ def adjust_text(subtitle, max_len=MAX_TEXT_LEN):
                 break
             lines[0] = lines[0][:split_idx]
             lines[1] = lines[0][split_idx+1:] + ' ' + lines[1]
-    
+
     subtitle.text = '\n'.join(lines)
     return subtitle
 
@@ -98,12 +121,19 @@ def process_srt_file(file_name, offset):
 
     adjusted_subtitles = []
     
-    for i in range(len(subtitles) - 1):
+    i = 0
+    while i < len(subtitles) - 1:
         subtitle = subtitles[i]
         next_subtitle = subtitles[i+1]
 
         if subtitle.end > next_subtitle.start:
             subtitle.end = next_subtitle.start
+
+        merged_subtitle = merge_subtitles(subtitle, next_subtitle)
+
+        if merged_subtitle is not None:
+            subtitle = merged_subtitle
+            i += 1  # Skip the next subtitle
 
         original_start = subtitle.start
         original_end = subtitle.end
@@ -118,8 +148,11 @@ def process_srt_file(file_name, offset):
             print(f"Adjusted: {subtitle}")
 
         adjusted_subtitles.append(subtitle)
+        i += 1
 
-    adjusted_subtitles.append(adjust_times(subtitles[-1], subtitles[-1]))
+    adjusted_subtitles = apply_transition_gap(adjusted_subtitles)  # Apply transition gap here
+    adjusted_subtitles.append(adjust_times(subtitles[-1], subtitles[-1], apply_gap=False))  # Do not apply transition gap here
+
 
     new_file_name = file_name.rsplit('.', 1)[0] + '.adjusted.srt'
     pysrt.SubRipFile(adjusted_subtitles).save(new_file_name, encoding='utf-8')
