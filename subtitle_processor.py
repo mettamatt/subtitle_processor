@@ -1,186 +1,173 @@
-import argparse
-import datetime
-import pysrt
+# Standard library imports
+import logging
+import os
 import re
 import sys
+from collections import defaultdict, Counter
 
-# Constants
-MIN_DURATION = pysrt.srttime.SubRipTime(0, 0, 0, 833)
-MIN_DURATION_SECONDS = 5/6
-MAX_DURATION = pysrt.srttime.SubRipTime(0, 0, 7, 0)
-MAX_TEXT_LEN = 42
-MIN_TEXT_LEN = 30
-TRANSITION_GAP = pysrt.srttime.SubRipTime(0, 0, 0, 120)
+# Third party imports
+import pysrt
+from nltk import word_tokenize, pos_tag, sent_tokenize
+from nltk.util import ngrams
 
-# Convert SubRipTime to seconds
-MIN_DURATION_SECONDS = (MIN_DURATION.hours * 3600) + (MIN_DURATION.minutes * 60) + MIN_DURATION.seconds + (MIN_DURATION.milliseconds / 1000.0)
-MAX_DURATION_SECONDS = (MAX_DURATION.hours * 3600) + (MAX_DURATION.minutes * 60) + MAX_DURATION.seconds + (MAX_DURATION.milliseconds / 1000.0)
+logging.basicConfig(
+    level=logging.DEBUG, 
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("debug.log"),
+        logging.StreamHandler()
+    ]
+)
 
-# Regular Expression
-PUNCTUATION_PATTERN = re.compile(r'[.!?]')
+MAX_READING_SPEED = 20
+MAX_LINE_LENGTH = 42
+MIN_DURATION = 1
+MAX_DURATION = 6
 
-# Helper Functions
-def replace_ellipses(text):
-    return text.replace("...", "\u2026")
+DEBUG = False  # Set to True to enable debug logging
 
-def subriptime_total_seconds(subriptime):
-    total_seconds = (subriptime.hours * 3600) + (subriptime.minutes * 60) + subriptime.seconds + (subriptime.milliseconds / 1000.0)
-    return total_seconds
-
-def apply_lead_in_offset(subtitles, offset):
-    if len(subtitles) > 0:
-        subtitles[0].start.shift(seconds=offset)
-    return subtitles
-
-def merge_subtitles(subtitle, next_subtitle):
-    gap = subriptime_total_seconds(next_subtitle.start) - subriptime_total_seconds(subtitle.end)
-    if gap < 1:  # If the gap is less than 1 second
-        if len(subtitle.text + " " + next_subtitle.text) <= MIN_TEXT_LEN:
-            new_subtitle = pysrt.SubRipItem(index=subtitle.index, start=subtitle.start, end=next_subtitle.end, text=subtitle.text + " " + next_subtitle.text)
-            return new_subtitle
-    return None
-
-def apply_transition_gap(subtitles):
-    for i in range(len(subtitles) - 1):
-        subtitle = subtitles[i]
-        next_subtitle = subtitles[i + 1]
-        
-        if subtitle.end + TRANSITION_GAP < next_subtitle.start:
-            subtitle.end += TRANSITION_GAP
+def join_words(words):
+    output = ''
+    for word in words:
+        if word in {',', '.', '!', '?', ':', ';'}:
+            output = output.rstrip() + word + ' '
         else:
-            subtitle.end = next_subtitle.start - TRANSITION_GAP
-
-        subtitles[i] = subtitle
-
-    return subtitles
-
-# Main Functions
-def adjust_times(subtitle, next_subtitle, apply_gap=True):
-    start_time = subtitle.start
-    end_time = subtitle.end
-    next_start_time = next_subtitle.start
-
-    duration = subriptime_total_seconds(end_time - start_time)
+            output += word + ' '
+    return output.rstrip()
     
-    if duration < MIN_DURATION_SECONDS:
-        end_time = min(start_time + MIN_DURATION, next_start_time - TRANSITION_GAP if apply_gap else next_start_time)
-    elif duration > MAX_DURATION_SECONDS:
-        end_time = start_time + MAX_DURATION
+def ngram_counter(words, n=2):
+    return Counter(ngrams(words, n))
+
+def text_normalization_for_integrity_check(text):
+    text = text.strip().lower()
+    return re.sub(r'\s+', ' ', text)
+
+def intelligent_breakpoint(phrase, max_line_length):
+    tagged = pos_tag(word_tokenize(phrase))
+
+    if DEBUG:
+        debug_info = f'[DEBUG START] intelligent_breakpoint\n  [DEBUG] Tagged words: {tagged}\n'
     
-    if apply_gap and end_time >= next_start_time:  
-        end_time = next_start_time - TRANSITION_GAP
+    if len(phrase) <= max_line_length or ' ' not in phrase:
+        breakpoint = len(phrase) - 1
 
-    subtitle.end = end_time
-    return subtitle
+        if DEBUG:
+            debug_info += f'  [DEBUG] Early return breakpoint: {breakpoint}\n[DEBUG END] intelligent_breakpoint\n'
+            logging.debug(debug_info)
 
-def adjust_text(subtitle, max_len=MAX_TEXT_LEN):
-    subtitle.text = replace_ellipses(subtitle.text)
+        return phrase, ""
 
-    if len(subtitle.text) <= max_len:
-        return subtitle
-
-    sentences = re.split(r'(?<=[.!?])\s+', subtitle.text)
-    split_idx = -1
-
-    for i, sentence in enumerate(sentences):
-        if len(''.join(sentences[:i+1])) > max_len:
-            split_idx = i
+    min_subtitle_length = max_line_length // 4
+    breakpoint = next((i for i, (word, tag) in enumerate(tagged[:max_line_length]) if tag == 'CC'), -1)
+    
+    while len(' '.join(word for word, tag in tagged[:breakpoint+1]).strip()) < min_subtitle_length:
+        try:
+            breakpoint = next(i for i, (word, tag) in enumerate(tagged[breakpoint+1:max_line_length], start=breakpoint+1) if tag == 'CC')
+        except StopIteration:
             break
 
-    if split_idx != -1:
-        subtitle.text = ' '.join(sentences[:split_idx]) + '\n' + ' '.join(sentences[split_idx:])
-    else:
-        subtitle.text = subtitle.text[:max_len] + '\n' + subtitle.text[max_len:]
+    if breakpoint != -1 and (breakpoint + 1) < len(tagged) and tagged[breakpoint+1][1] in {'PRP', 'PRP$', 'WP', 'WP$'}:
+        breakpoint -= 1
 
-    lines = subtitle.text.split('\n')
-    while len(lines) > 2 or (len(lines) == 2 and len(lines[0].split()) <= 3):
-        if len(lines) == 2:
-            lines[0] = lines[0] + ' ' + lines[1].split(' ', 1)[0]
-            lines[1] = ' '.join(lines[1].split(' ', 1)[1:])
-        else:
-            split_idx = lines[0].rfind(' ')
-            if split_idx == -1: 
-                break
-            lines[0] = lines[0][:split_idx]
-            lines[1] = lines[0][split_idx+1:] + ' ' + lines[1]
+    if breakpoint != -1 and (breakpoint + 1) < len(tagged) and tagged[breakpoint+1][1] in {'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ'} or tagged[breakpoint][1] in {'RB', 'RBR', 'RBS'}:
+        breakpoint -= 1
 
-    subtitle.text = '\n'.join(lines)
-    return subtitle
+    if breakpoint == -1:
+        breakpoint = phrase.rfind(' ', 0, max_line_length)
 
-def process_srt_file(file_name, offset):
-    if file_name.endswith('.adjusted.srt'):
-        print(f"The file {file_name} appears to have already been processed. Skipping.")
-        return file_name
-    try:
-        subtitles = pysrt.open(file_name)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Error: File {file_name} not found.")
-    except pysrt.Error:
-        raise ValueError(f"Error: Could not read file {file_name}. Please check if it is a valid .srt file.")
-    except Exception as e:
-        raise Exception(f"An unexpected error occurred: {str(e)}")
+    if breakpoint == -1 or breakpoint >= max_line_length:
+        breakpoint = max_line_length - 1
 
-    subtitles = apply_lead_in_offset(subtitles, lead_in_offset)
+    first_phrase = join_words(word for word, tag in tagged[:breakpoint+1])
+    remaining_phrase = join_words(word for word, tag in tagged[breakpoint+1:])
 
-    adjusted_subtitles = []
-    adjusted_counter = 0
-    total_subtitles = len(subtitles)
+    # If the remaining phrase starts with a comma, move the comma to the end of the first phrase
+    if remaining_phrase.startswith(", "):
+        first_phrase += ","
+        remaining_phrase = remaining_phrase[2:]
+
+    if DEBUG:
+        debug_info += f'  [DEBUG] Final phrase split: "{first_phrase}" and "{remaining_phrase}"\n[DEBUG END] intelligent_breakpoint\n'
+        logging.debug(debug_info)
+
+    return first_phrase, remaining_phrase
     
-    i = 0
-    while i < len(subtitles) - 1:
-        subtitle = subtitles[i]
-        next_subtitle = subtitles[i+1]
+def create_and_add_subtitle(phrase, start_time, new_subs, new_subs_set, orig_to_new_subs, sub, i, next_sub_start=None):
+    # calculate duration based on phrase length
+    duration_seconds = max(min(len(phrase) / MAX_READING_SPEED, MAX_DURATION), MIN_DURATION)
+    duration_milliseconds = duration_seconds * 1000
+    new_end = start_time + pysrt.SubRipTime(milliseconds=duration_milliseconds)
 
-        if subtitle.end > next_subtitle.start:
-            subtitle.end = next_subtitle.start
+    # Check if the new_end time exceeds the start time of the next original subtitle.
+    if next_sub_start is not None and new_end > next_sub_start:
+        new_end = next_sub_start - pysrt.SubRipTime(milliseconds=1)
+        
+    new_sub = pysrt.SubRipItem(index=len(new_subs) + 1, text=phrase.strip(), start=start_time, end=new_end)
+    new_sub_tuple = (new_sub.text, str(new_sub.start), str(new_sub.end))
 
-        merged_subtitle = merge_subtitles(subtitle, next_subtitle)
+    if new_sub_tuple not in new_subs_set:
+        new_subs.append(new_sub)
+        new_subs_set.add(new_sub_tuple)
 
-        if merged_subtitle is not None:
-            subtitle = merged_subtitle
-            i += 1 
+    orig_to_new_subs[i].append(new_sub.text)
 
-        original_start = subtitle.start
-        original_end = subtitle.end
-        original_text = subtitle.text
+    if DEBUG:
+        logging.debug(f'Linked new subtitle: {new_sub.text} to original: {sub.text}')
 
-        subtitle = adjust_times(subtitle, next_subtitle)
-        subtitle = adjust_text(subtitle)
+    # return the new end time
+    return new_end + pysrt.SubRipTime(milliseconds=1)
 
-        if original_start != subtitle.start or original_end != subtitle.end or original_text != subtitle.text:
-            adjusted_counter += 1
+def adjust_subtitles(input_file_path):
+    orig_subs = pysrt.open(input_file_path)
+    new_subs = []
+    new_subs_set = set()
+    orig_to_new_subs = defaultdict(list)
 
-        adjusted_subtitles.append(subtitle)
-        i += 1
+    for i, sub in enumerate(orig_subs):
+        sentences = sent_tokenize(sub.text)
+        phrases = [phrase for sentence in sentences for phrase in re.split(r'(?<=,),', sentence)]
+    
+        next_sub_start = orig_subs[i+1].start if i < len(orig_subs) - 1 else None
 
-    adjusted_subtitles = apply_transition_gap(adjusted_subtitles) 
-    adjusted_subtitles.append(adjust_times(subtitles[-1], subtitles[-1], apply_gap=False))
+        original_start = sub.start
 
-    new_file_name = file_name.rsplit('.', 1)[0] + '.adjusted.srt'
-    pysrt.SubRipFile(adjusted_subtitles).save(new_file_name, encoding='utf-8')
+        for phrase in phrases:
+            phrase = phrase.strip()
 
-    adjusted_percentage = (adjusted_counter / total_subtitles) * 100
-    print(f"Total subtitles: {total_subtitles}")
-    print(f"Total subtitles adjusted: {adjusted_counter}")
-    print(f"Percentage of subtitles adjusted: {adjusted_percentage:.2f}%")
+            while len(phrase) > MAX_LINE_LENGTH:
+                first_phrase, remaining_phrase = intelligent_breakpoint(phrase, MAX_LINE_LENGTH)
+                original_start = create_and_add_subtitle(first_phrase, original_start, new_subs, new_subs_set, orig_to_new_subs, sub, i, next_sub_start)
+                phrase = remaining_phrase.strip()
 
-    return new_file_name
+            if len(phrase) > 0:
+                original_start = create_and_add_subtitle(phrase, original_start, new_subs, new_subs_set, orig_to_new_subs, sub, i, next_sub_start)
 
+    subs = pysrt.SubRipFile(items=new_subs)
+    output_file_path = os.path.splitext(input_file_path)[0] + '.adjusted.srt'
+    subs.save(output_file_path, encoding='utf-8')
+
+    original_bigrams = ngram_counter(word for sub in orig_subs for word in word_tokenize(text_normalization_for_integrity_check(sub.text)))
+    new_bigrams = ngram_counter(word for sub in new_subs for word in word_tokenize(text_normalization_for_integrity_check(sub.text)))
+
+    missing_bigrams = original_bigrams - new_bigrams
+    extra_bigrams = new_bigrams - original_bigrams
+
+    if len(missing_bigrams) != 0:
+        print(f'Error: Missing bigrams: {missing_bigrams}')
+
+    if len(extra_bigrams) != 0:
+        print(f'Error: Extra bigrams: {extra_bigrams}')
+
+    return output_file_path, orig_to_new_subs
+    
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="This script processes .srt subtitle files. It adjusts the timings and text length of each subtitle based on predefined constants. It also applies an initial offset to all subtitles.")
-    parser.add_argument('files', type=str, nargs='*', help='The paths to the .srt files to be processed.')
-    parser.add_argument('-l', '--lead-in-offset', type=float, default=0.0, help='The initial offset (in seconds) to be applied to the first subtitle in the .srt file. If not provided, the default is 0.0.')
-
-    args = parser.parse_args()
-
-    try:
-        file_paths = args.files
-        lead_in_offset = args.lead_in_offset
-        if lead_in_offset < 0:
-            raise ValueError("Error: Lead-in offset cannot be negative.")
-        for file_path in file_paths:
-            result = process_srt_file(file_path, lead_in_offset)
-            print(result)
-    except Exception as e:
-        print(e)
+    # Check if command line argument is provided
+    if len(sys.argv) < 2:
+        print("Usage: python subtitle_processor.py /path/to/subtitle/file.srt")
         sys.exit(1)
+
+    # Get the path to the .srt file from the command line arguments
+    input_file_path = sys.argv[1]
+
+    # Call the function to adjust the subtitles
+    adjust_subtitles(input_file_path)
