@@ -1,81 +1,48 @@
 # Subtitle Processor
 
-Subtitle Processor is a Python script that processes `.srt` subtitle files. It adjusts the timings and text length of each subtitle based on predefined constants. It also applies an initial offset (lead-in offset) to all the subtitles. The script loosely follows the guidelines of the [Netflix Timed Text Style Guide](https://partnerhelp.netflixstudios.com/hc/en-us/articles/215758617-Timed-Text-Style-Guide-General-Requirements).
+Subtitle Processor is a Python script that processes subtitle files in the SubRip Text format (`.srt`). It adjusts the timing and line breaks of the subtitles to make them easier to read. 
 
-## Requirements
+## Overview
 
-This script requires Python and the following Python packages:
-
-- `argparse`
-- `datetime`
-- `pysrt`
-- `re`
-- `sys`
-
-You can install the required Python packages with pip:
-
-```bash
-pip install argparse pysrt
-```
-
-## Usage
-
-To use this script, you need to provide the path to the `.srt` file to be processed as an argument. You can also optionally provide a lead-in offset (in seconds) that will be applied to the first subtitle in the `.srt` file. If you want to process multiple files, you can provide the paths of multiple `.srt` files.
-
-Here is an example:
-
-```bash
-python subtitle_processor.py /path/to/file1.srt /path/to/file2.srt --lead-in-offset 1.5
-```
-
-If the lead-in offset is not provided, the default value of 0.0 seconds is used.
-
-## Output
-
-The script will create new `.srt` files with adjusted subtitles for each input file. The new files will be saved in the same directory as the corresponding input files, preserving the original files. 
-
-For example:
-
-```bash
-python subtitle_processor.py /path/to/file.srt --lead-in-offset 1.5
-```
-
-Will output:
-
-```
-/path/to/file.adjusted.srt
-```
-
-This signifies that the processing has been completed and the adjusted `.srt` file is available at `/path/to/file.adjusted.srt`.
-
-Remember that the script does not delete or modify the original `.srt` files, it merely reads them and creates new, adjusted versions. This way, your original subtitle data remains intact and unmodified.
+The script works by loading a language model from the `spacy` library to analyze the text of the subtitles. It then processes each subtitle, splits sentences into lines, and adjusts the timing of each subtitle. The new subtitles are saved to a new `.srt` file with the same name as the original file, but with `.adjusted` added before the file extension.
 
 ## Constants
 
-The script uses the following constants for adjusting subtitle timings and text length:
+The script defines the following constants:
 
-- `MIN_DURATION`: The minimum duration of a subtitle (833 milliseconds)
-- `MIN_DURATION_SECONDS`: The minimum duration in seconds (5/6 seconds)
-- `MAX_DURATION`: The maximum duration of a subtitle (7 seconds)
-- `MAX_TEXT_LEN`: The maximum length of text in a subtitle (42 characters)
-- `TRANSITION_GAP`: The transition gap between two subtitles (120 milliseconds)
-
-These constants can be adjusted to fit your needs.
+- `MAX_READING_SPEED`: The maximum reading speed in characters per second. Used to calculate the duration of each subtitle.
+- `MAX_LINE_LENGTH`: The maximum length of a line of subtitle text.
+- `MIN_DURATION`: The minimum duration of a subtitle in seconds.
+- `MAX_DURATION`: The maximum duration of a subtitle in seconds.
+- `DEBUG`: A boolean variable that enables or disables debug logging. When set to `True`, the script logs additional information about its operation.
 
 ## Functions
 
-The script includes the following main functions:
+The script uses the following functions:
 
-- `adjust_times(subtitle, next_subtitle)`: Adjusts the end time of a subtitle based on its duration and the start time of the next subtitle.
-- `adjust_text(subtitle, max_len=MAX_TEXT_LEN)`: Adjusts the text of a subtitle by replacing ellipses and potentially splitting the text into multiple lines.
-- `process_srt_file(file_name, offset)`: Processes an `.srt` file by applying an offset and adjusting the timings and text length of each subtitle.
+- `get_intelligent_breakpoints(phrase, max_line_length)`: Takes a phrase and breaks it into lines, considering the maximum line length and the structure of the language.
+- `create_and_add_subtitle(phrase, start_time, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start)`: Creates a new subtitle with adjusted timing and adds it to the list of new subtitles, avoiding duplicate subtitles.
+- `split_and_adjust_subtitles(input_file_path)`: The main function that opens the original subtitle file, processes each subtitle, splits sentences into lines, and adjusts the timing of each subtitle.
 
-And these helper functions:
+## Requirements
 
-- `replace_ellipses(text)`: Replaces all occurrences of '...' in the text with the unicode character for ellipsis '\u2026'.
-- `subriptime_total_seconds(subriptime)`: Converts a SubRipTime object to its equivalent in total seconds.
-- `apply_lead_in_offset(subtitles, offset)`: Applies an initial offset to the start time of the first subtitle.
+The script requires the following Python libraries:
 
-## Errors
+- `pysrt==1.1.2`: A Python library for editing .srt files.
+- `spacy==3.6.0`: A library for advanced Natural Language Processing in Python.
 
-In case of an error (like the provided `.srt` file not being found or not being a valid `.srt` file), the script will print the error message and exit with status code 1.
+These dependencies can be installed by running the command `pip install -r requirements.txt` in your terminal, in the same directory as the `requirements.txt` file.
+
+## Usage
+
+To use the script, run it as follows:
+
+```bash
+python subtitle_processor.py /path/to/subtitle/file.srt
+```
+
+Replace `/path/to/subtitle/file.srt` with the path to the `.srt` file that you want to process.
+
+## License
+
+This project is licensed under the terms of the MIT license. See the `LICENSE` file for details.
