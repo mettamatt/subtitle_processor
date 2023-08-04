@@ -35,62 +35,69 @@ def get_intelligent_breakpoints(phrase, max_line_length=42):
     logging.debug(f'  Input phrase: "{phrase}"')
 
     doc = nlp(phrase)
+    current_line_tokens = []  # To keep track of the current line as tokens
     lines = []
-    current_line = ''
-    second_line = ''
+    last_token_idx = -1
 
-    for token in doc:
-        token_text = token.text_with_ws  # use text_with_ws instead of text + whitespace_
+    for idx, token in enumerate(doc):
+        token_text = token.text
         logging.debug(f'  Current token: "{token_text}", dep_: {token.dep_}')
 
-        last_token = nlp(current_line.rstrip())[-1] if current_line else None
+        last_token = doc[last_token_idx] if last_token_idx != -1 else None
         can_split = last_token.dep_ not in {"cc", "conj", "prep", "punct"} if last_token else False
 
         # Prepare a prospective line addition
-        prospective_line = current_line + second_line + token_text.strip() if not token_text.isalnum() else current_line + second_line + token_text
+        prospective_line_tokens = current_line_tokens + [token_text] + [token.whitespace_]
+        prospective_line = ''.join(prospective_line_tokens).strip()
 
-        if len(prospective_line.rstrip()) <= max_line_length:
-            current_line += second_line
-            second_line = ''
-            if not token_text.isalnum():
-                current_line += token_text.strip()
-            else:
-                current_line += token_text
-            logging.debug(f'  Appended token to current_line: "{current_line}"')
+        if len(prospective_line) <= max_line_length:
+            current_line_tokens.extend([token_text, token.whitespace_])
+            last_token_idx = idx
+            logging.debug(f'  Appended token to current_line: {prospective_line}')
 
         elif can_split:
-            # If the prospective line is too long but can be split, add second_line to current_line
-            # And add token_text to second_line
-            current_line += second_line
-            second_line = token_text.strip() if not token_text.isalnum() else token_text
-            logging.debug(f'  Appended token to second_line: "{second_line}"')
+            logging.debug(f'  Splitting line at spacy token: "{token_text}"')
+            lines.append(''.join(current_line_tokens).strip())
+            logging.debug(f'  Added to lines: "{"".join(current_line_tokens).strip()}"')
+            current_line_tokens = [token_text, token.whitespace_]
+            last_token_idx = idx
 
         else:
-            logging.debug(f'  Length of prospective line exceeds max_line_length')
-            if current_line.strip():
-                line_to_add = current_line.replace('\n', ' ').strip()
-                lines.append(line_to_add)
-                logging.debug(f'  Added to lines: "{line_to_add}"')
-                current_line = second_line
-                second_line = token_text.strip() if not token_text.isalnum() else token_text
+            if current_line_tokens:
+                lines.append(''.join(current_line_tokens).strip())
+                logging.debug(f'  Added to lines: "{"".join(current_line_tokens).strip()}"')
+            current_line_tokens = [token_text, token.whitespace_]
+            last_token_idx = idx
 
-    if current_line.strip():
-        line_to_add = current_line.replace('\n', ' ').strip()
-        lines.append(line_to_add)
-        logging.debug(f'  Added to lines: "{line_to_add}"')
+    if current_line_tokens:
+        lines.append(''.join(current_line_tokens).strip())
+        logging.debug(f'  Added to lines: "{"".join(current_line_tokens).strip()}"')
 
-    if second_line.strip():
-        line_to_add = second_line.replace('\n', ' ').strip()
-        lines.append(line_to_add)
-        logging.debug(f'  Added to lines: "{line_to_add}"')
+    # ensure that there are at most 2 lines
+    while len(lines) > 2:
+        lines[-2] += ' ' + lines[-1]
+        logging.debug(f'  Merged last two lines: "{lines[-2]}"')
+        del lines[-1]
 
     logging.debug(f'  Output lines: {lines}')
     logging.debug(f'[END] get_intelligent_breakpoints\n')
 
-    return lines
+    return [lines] if lines else []
     
-def create_and_add_subtitle(phrase, start_time, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start=None):
+def create_and_add_subtitle(lines, start_time, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start=None):
     logging.debug(f'[START] create_and_add_subtitle')
+    
+    # Flatten list of lists into single list of strings
+    flattened_lines = [item for sublist in lines for item in sublist]
+    
+    # Join lines together, but ensure that there are at most 2 lines
+    phrase = "\n".join(flattened_lines)
+    split_phrase = phrase.split('\n')
+    while len(split_phrase) > 2:
+        split_phrase[-2] += ' ' + split_phrase[-1]
+        del split_phrase[-1]
+    phrase = "\n".join(split_phrase)
+    
     # calculate duration based on phrase length
     duration_seconds = max(min(len(phrase) / MAX_READING_SPEED, MAX_DURATION), MIN_DURATION)
     duration_milliseconds = duration_seconds * 1000
@@ -101,7 +108,7 @@ def create_and_add_subtitle(phrase, start_time, new_subs, unique_new_subtitles, 
         logging.debug(f'  Adjusting new_end because it exceeds next_sub_start')
         new_end = next_sub_start - pysrt.SubRipTime(milliseconds=1)
         
-    new_sub = pysrt.SubRipItem(index=len(new_subs) + 1, text=phrase.strip(), start=start_time, end=new_end)
+    new_sub = pysrt.SubRipItem(index=len(new_subs) + 1, text=phrase, start=start_time, end=new_end)
     new_sub_tuple = (new_sub.text, str(new_sub.start), str(new_sub.end))
 
     if new_sub_tuple not in unique_new_subtitles:
@@ -121,12 +128,34 @@ def create_and_add_subtitle(phrase, start_time, new_subs, unique_new_subtitles, 
     # return the new end time
     return new_end + pysrt.SubRipTime(milliseconds=1)
 
+def integrity_check(original_text, adjusted_text):
+    original_words = original_text.lower().split()
+    adjusted_words = adjusted_text.lower().split()
+
+    if original_words != adjusted_words:
+        for i, (original_word, adjusted_word) in enumerate(zip(original_words, adjusted_words)):
+            if original_word != adjusted_word:
+                logging.error(f"Integrity check failed at word {i}: Original word is '{original_word}', but adjusted word is '{adjusted_word}'.")
+                return False
+        if len(original_words) > len(adjusted_words):
+            logging.error(f"Integrity check failed: Original text has additional words: {original_words[len(adjusted_words):]}")
+            return False
+        elif len(adjusted_words) > len(original_words):
+            logging.error(f"Integrity check failed: Adjusted text has additional words: {adjusted_words[len(original_words):]}")
+            return False
+    else:
+        logging.info("Integrity check passed: Original and adjusted texts match.")
+        return True
+
 def split_and_adjust_subtitles(input_file_path):
     logging.debug(f'[START] split_and_adjust_subtitles')
     orig_subs = pysrt.open(input_file_path)
     new_subs = []
     unique_new_subtitles = set()
     orig_to_new_subs = defaultdict(list)
+    
+    # Collect Original Text
+    original_text = " ".join(sub.text for sub in orig_subs)
 
     for i, sub in enumerate(orig_subs):
         logging.debug(f'Processing subtitle {i}: "{sub.text}"')
@@ -138,16 +167,24 @@ def split_and_adjust_subtitles(input_file_path):
         original_start = sub.start
 
         for j, sentence in enumerate(sentences):
-            phrase = sentence.text.strip()
+            phrase = sentence.text
             
             logging.debug(f'Processing sentence {j} in subtitle {i}: "{phrase}"')
             lines = get_intelligent_breakpoints(phrase, MAX_LINE_LENGTH)
             
             logging.debug(f'Split sentence "{phrase}" into lines: {lines}')
-            for k, line in enumerate(lines):
-                if len(line) > 0:
-                    logging.debug(f'Processing line {k} in sentence {j} in subtitle {i}: "{line}"')
-                    original_start = create_and_add_subtitle(line, original_start, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start)
+            if len(lines) > 0:
+                logging.debug(f'Processing lines in sentence {j} in subtitle {i}: "{lines}"')
+                original_start = create_and_add_subtitle(lines, original_start, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start)
+
+    # Collect Adjusted Text
+    adjusted_text = " ".join(new_sub.text for new_sub in new_subs)
+
+    # Run the integrity check
+    if not integrity_check(original_text, adjusted_text):
+        logging.error("Integrity check failed: Original and adjusted texts do not match.")
+    else:
+        logging.info("Integrity check passed: Original and adjusted texts match.")
 
     subs = pysrt.SubRipFile(items=new_subs)
     output_file_path = os.path.splitext(input_file_path)[0] + '.adjusted.srt'
