@@ -28,11 +28,11 @@ MAX_LINE_LENGTH = 42
 MIN_DURATION = 1
 MAX_DURATION = 6
 
-DEBUG = True  # Set to True to enable debug logging
+DEBUG = False  # Set to True to enable debug logging
 
 def get_intelligent_breakpoints(phrase, max_line_length=42):
     logging.debug(f'[START] get_intelligent_breakpoints')
-    logging.debug(f'  Input phrase: "{phrase}"')
+    logging.debug(f'  Input phrase: "{phrase}" with max line length: {max_line_length}')
 
     doc = nlp(phrase)
     current_line_tokens = []  # To keep track of the current line as tokens
@@ -41,42 +41,45 @@ def get_intelligent_breakpoints(phrase, max_line_length=42):
 
     for idx, token in enumerate(doc):
         token_text = token.text
-        logging.debug(f'  Current token: "{token_text}", dep_: {token.dep_}')
+        logging.debug(f'  Iterating token {idx}: "{token_text}", dependency: {token.dep_}')
 
         last_token = doc[last_token_idx] if last_token_idx != -1 else None
         can_split = last_token.dep_ not in {"cc", "conj", "prep", "punct"} if last_token else False
+        
+        is_apostrophe_conj = last_token and last_token.text == "'" and last_token.dep_ == "conj"
+        can_split = not is_apostrophe_conj and (last_token.dep_ not in {"cc", "conj", "prep", "punct"} if last_token else False)
+    
 
         # Prepare a prospective line addition
-        prospective_line_tokens = current_line_tokens + [token_text] + [token.whitespace_]
-        prospective_line = ''.join(prospective_line_tokens).strip()
+        prospective_line_tokens = current_line_tokens + [token_text]
+        prospective_line = ''.join(prospective_line_tokens).strip() + token.whitespace_
 
-        if len(prospective_line) <= max_line_length:
+        # Handle contractions like "she's"
+        if token_text.startswith("'") and last_token:
             current_line_tokens.extend([token_text, token.whitespace_])
             last_token_idx = idx
-            logging.debug(f'  Appended token to current_line: {prospective_line}')
+            logging.debug(f'  Token is a contraction, appended to current_line: {"".join(current_line_tokens).strip()}')
+            continue
 
-        elif can_split:
-            logging.debug(f'  Splitting line at spacy token: "{token_text}"')
-            lines.append(''.join(current_line_tokens).strip())
-            logging.debug(f'  Added to lines: "{"".join(current_line_tokens).strip()}"')
-            current_line_tokens = [token_text, token.whitespace_]
+        if len(prospective_line) <= max_line_length or token.dep_ == "punct":
+            current_line_tokens.extend([token_text, token.whitespace_])
             last_token_idx = idx
-
+            logging.debug(f'  Token fits in line, appended to current_line: {prospective_line}')
         else:
             if current_line_tokens:
                 lines.append(''.join(current_line_tokens).strip())
-                logging.debug(f'  Added to lines: "{"".join(current_line_tokens).strip()}"')
+                logging.debug(f'  Line split, added to lines: "{"".join(current_line_tokens).strip()}"')
             current_line_tokens = [token_text, token.whitespace_]
             last_token_idx = idx
 
     if current_line_tokens:
         lines.append(''.join(current_line_tokens).strip())
-        logging.debug(f'  Added to lines: "{"".join(current_line_tokens).strip()}"')
+        logging.debug(f'  Added remaining tokens to lines: "{"".join(current_line_tokens).strip()}"')
 
     # ensure that there are at most 2 lines
     while len(lines) > 2:
         lines[-2] += ' ' + lines[-1]
-        logging.debug(f'  Merged last two lines: "{lines[-2]}"')
+        logging.debug(f'  More than 2 lines, merged last two lines: "{lines[-2]}"')
         del lines[-1]
 
     logging.debug(f'  Output lines: {lines}')
@@ -135,7 +138,12 @@ def integrity_check(original_text, adjusted_text):
     if original_words != adjusted_words:
         for i, (original_word, adjusted_word) in enumerate(zip(original_words, adjusted_words)):
             if original_word != adjusted_word:
+                context_range = 5  # Number of words to include before and after the mismatch
+                original_context = original_words[max(i - context_range, 0):min(i + context_range + 1, len(original_words))]
+                adjusted_context = adjusted_words[max(i - context_range, 0):min(i + context_range + 1, len(adjusted_words))]
                 logging.error(f"Integrity check failed at word {i}: Original word is '{original_word}', but adjusted word is '{adjusted_word}'.")
+                logging.error(f"Original context: {' '.join(original_context)}")
+                logging.error(f"Adjusted context: {' '.join(adjusted_context)}")
                 return False
         if len(original_words) > len(adjusted_words):
             logging.error(f"Integrity check failed: Original text has additional words: {original_words[len(adjusted_words):]}")
