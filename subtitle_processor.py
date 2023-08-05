@@ -35,7 +35,7 @@ def get_intelligent_breakpoints(phrase, max_line_length=42):
 
     # Strip leading and trailing spaces
     phrase = phrase.strip()
-    
+
     logging.debug(f'  Input phrase: "{phrase}" with max line length: {max_line_length}')
 
     doc = nlp(phrase)
@@ -43,38 +43,78 @@ def get_intelligent_breakpoints(phrase, max_line_length=42):
     lines = []
     last_token_idx = -1
 
-    for idx, token in enumerate(doc):
+    idx = 0
+    while idx < len(doc):
+        token = doc[idx]
         token_text = token.text
         logging.debug(f'  Iterating token {idx}: "{token_text}", dependency: {token.dep_}')
+        logging.debug(f'  Current line so far: "{"".join(current_line_tokens).strip()}" with length {len("".join(current_line_tokens).strip())}')
 
-        last_token = doc[last_token_idx] if last_token_idx != -1 else None
-        can_split = last_token.dep_ not in {"cc", "conj", "prep", "punct"} if last_token else False
-        
-        is_apostrophe_conj = last_token and last_token.text == "'" and last_token.dep_ == "conj"
-        can_split = not is_apostrophe_conj and (last_token.dep_ not in {"cc", "conj", "prep", "punct"} if last_token else False)
-    
+        # Check if tokens form a hyphenated word
+        hyphenated_word = [token_text]
+        next_idx = idx + 1
+        while next_idx < len(doc) - 1 and doc[next_idx].text == '-' and doc[next_idx].dep_ == "punct":
+            hyphenated_word.append(doc[next_idx].text)  # Append hyphen
+            hyphenated_word.append(doc[next_idx + 1].text if next_idx + 1 < len(doc) else '')
+            next_idx += 2
 
-        # Prepare a prospective line addition
-        prospective_line_tokens = current_line_tokens + [token_text]
-        prospective_line = ''.join(prospective_line_tokens).strip() + token.whitespace_
-
-        # Handle contractions like "she's"
-        if token_text.startswith("'") and last_token:
-            current_line_tokens.extend([token_text, token.whitespace_])
-            last_token_idx = idx
-            logging.debug(f'  Token is a contraction, appended to current_line: {"".join(current_line_tokens).strip()}')
+        # Update the index if a hyphenated word was found
+        if len(hyphenated_word) > 1:
+            idx = next_idx - 2  # Adjust the index to the correct position after the hyphenated word
+            logging.debug(f'  Hyphenated word found, collecting: {"".join(hyphenated_word)}')
+            current_line_tokens.extend(hyphenated_word)
+            current_line_tokens.append(doc[idx + 1].whitespace_)  # Append the whitespace of the last token of the hyphenated word
+            logging.debug(f'  Appended hyphenated word to current_line: {"".join(current_line_tokens).strip()}')
+            idx += 2  # Increment by 2 to skip the next word that has been already included
             continue
 
-        if len(prospective_line) <= max_line_length or token.dep_ == "punct":
-            current_line_tokens.extend([token_text, token.whitespace_])
+        # Check for contractions using dependency tags and apostrophes
+        contraction_deps = ['neg', 'aux', 'pos']
+        if idx < len(doc) - 1:
+            logging.debug(f'  Checking contraction for token {idx}: "{token_text}", dependency: {token.dep_}, next token: "{doc[idx + 1].text}", next token dependency: {doc[idx + 1].dep_}, next token head: {doc[idx + 1].head.i}')
+
+        if idx < len(doc) - 1 and "'" in doc[idx + 1].text and doc[idx + 1].dep_ in contraction_deps and (token.dep_ == 'ROOT' or token.dep_ == 'aux'):
+            next_token_text = doc[idx + 1].text
+            prospective_line = ''.join(current_line_tokens).strip() + token_text + next_token_text
+            logging.debug(f'  Detected contraction: "{token_text + next_token_text}" which would make line length {len(prospective_line)}')
+
+            if len(prospective_line) > max_line_length:
+                logging.debug(f'  Contraction would exceed max line length. Splitting line.')
+                lines.append(''.join(current_line_tokens).strip())
+                current_line_tokens = [token_text, next_token_text + doc[idx + 1].whitespace_]
+            else:
+                logging.debug(f'  Appending contraction to current line: "{token_text + next_token_text}"')
+                current_line_tokens.append(token_text)
+                current_line_tokens.append(next_token_text + doc[idx + 1].whitespace_)
+            idx += 2
+            continue
+
+        # Prepare a prospective line addition
+        prospective_line_tokens = current_line_tokens + hyphenated_word
+        prospective_line = ''.join(prospective_line_tokens).strip() + token.whitespace_
+
+        last_token = doc[last_token_idx] if last_token_idx != -1 else None
+        is_apostrophe_or_hyphen_conj = last_token and (last_token.text == "'" or last_token.text == "-") and last_token.dep_ == "conj"
+
+        if len(hyphenated_word) > 1:
+            current_line_tokens.extend(hyphenated_word + [token.whitespace_])
+            last_token_idx = idx
+            logging.debug(f'  Token is a hyphenated word, appended to current_line: {"".join(current_line_tokens).strip()}')
+            idx += 2
+            continue
+        # Now check line length
+        elif len(prospective_line) <= max_line_length or token.dep_ == "punct":
+            current_line_tokens.extend(hyphenated_word + [token.whitespace_])
             last_token_idx = idx
             logging.debug(f'  Token fits in line, appended to current_line: {prospective_line}')
+            idx += 1
         else:
             if current_line_tokens:
                 lines.append(''.join(current_line_tokens).strip())
                 logging.debug(f'  Line split, added to lines: "{"".join(current_line_tokens).strip()}"')
-            current_line_tokens = [token_text, token.whitespace_]
+            current_line_tokens = hyphenated_word + [token.whitespace_]
             last_token_idx = idx
+            idx += 1
 
     if current_line_tokens:
         lines.append(''.join(current_line_tokens).strip())
