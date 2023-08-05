@@ -32,6 +32,10 @@ DEBUG = False  # Set to True to enable debug logging
 
 def get_intelligent_breakpoints(phrase, max_line_length=42):
     logging.debug(f'[START] get_intelligent_breakpoints')
+
+    # Strip leading and trailing spaces
+    phrase = phrase.strip()
+    
     logging.debug(f'  Input phrase: "{phrase}" with max line length: {max_line_length}')
 
     doc = nlp(phrase)
@@ -157,6 +161,7 @@ def integrity_check(original_text, adjusted_text):
 
 def split_and_adjust_subtitles(input_file_path):
     logging.debug(f'[START] split_and_adjust_subtitles')
+    
     orig_subs = pysrt.open(input_file_path)
     new_subs = []
     unique_new_subtitles = set()
@@ -166,24 +171,22 @@ def split_and_adjust_subtitles(input_file_path):
     original_text = " ".join(sub.text for sub in orig_subs)
 
     for i, sub in enumerate(orig_subs):
-        logging.debug(f'Processing subtitle {i}: "{sub.text}"')
-        doc = nlp(sub.text)
-        sentences = list(doc.sents)
+        logging.debug(f'Processing subtitle {i} with text: "{sub.text}"')
 
+        # Process the entire subtitle text
+        phrase = sub.text.replace('\n', ' ').strip()
+        logging.debug(f'Consolidated subtitle text for processing: "{phrase}"')
+        
+        lines = get_intelligent_breakpoints(phrase, MAX_LINE_LENGTH)
+        logging.debug(f'Intelligently split subtitle text into lines: {lines}')
+        
+        original_start = sub.start
         next_sub_start = orig_subs[i+1].start if i < len(orig_subs) - 1 else None
 
-        original_start = sub.start
-
-        for j, sentence in enumerate(sentences):
-            phrase = sentence.text
-            
-            logging.debug(f'Processing sentence {j} in subtitle {i}: "{phrase}"')
-            lines = get_intelligent_breakpoints(phrase, MAX_LINE_LENGTH)
-            
-            logging.debug(f'Split sentence "{phrase}" into lines: {lines}')
-            if len(lines) > 0:
-                logging.debug(f'Processing lines in sentence {j} in subtitle {i}: "{lines}"')
-                original_start = create_and_add_subtitle(lines, original_start, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start)
+        # Process the lines generated from the subtitle
+        if lines:
+            logging.debug(f'Processing and adjusting lines for subtitle {i}')
+            original_start = create_and_add_subtitle(lines, original_start, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start)
 
     # Collect Adjusted Text
     adjusted_text = " ".join(new_sub.text for new_sub in new_subs)
@@ -194,6 +197,7 @@ def split_and_adjust_subtitles(input_file_path):
     else:
         logging.info("Integrity check passed: Original and adjusted texts match.")
 
+    # Save the adjusted subtitles
     subs = pysrt.SubRipFile(items=new_subs)
     output_file_path = os.path.splitext(input_file_path)[0] + '.adjusted.srt'
     subs.save(output_file_path, encoding='utf-8')
