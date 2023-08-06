@@ -131,6 +131,13 @@ def get_intelligent_breakpoints(phrase):
                     lines.append(''.join(current_line_tokens).strip())
                 current_line_tokens = [token_text + token.whitespace_]
             idx += 1
+        elif token.ent_type_:
+            # Preserve named entities
+            entity_text = token.ent_type_
+
+            while idx < len(doc) and doc[idx].ent_type_ == entity_text:
+                current_line_tokens.append(doc[idx].text + doc[idx].whitespace_)
+                idx += 1
         else:
             prospective_line_tokens = current_line_tokens + [token_text + token.whitespace_]
             prospective_line = ''.join(prospective_line_tokens).strip()
@@ -150,7 +157,7 @@ def get_intelligent_breakpoints(phrase):
     while len(lines) > 2:
         lines[-2] += ' ' + lines[-1]
         del lines[-1]
-        
+
     return lines
     
 def create_adjusted_subtitle(lines, start_time, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start=None):    
