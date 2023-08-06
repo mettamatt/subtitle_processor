@@ -1,29 +1,39 @@
 # Standard library imports
+import argparse
+from collections import defaultdict
+from itertools import zip_longest
 import logging
 import os
 import sys
-from collections import defaultdict
 
-# Third party imports
+# Third-party imports
 import pysrt
 import spacy
+from spacy.cli import download
 
-SPACY_MODEL = 'en_core_web_md' #en_core_web_sm, en_core_web_md, en_core_web_lg
-MAX_READING_SPEED = 20
+# Spacy model configurations
+# Available options: 'en_core_web_sm', 'en_core_web_md', 'en_core_web_lg'
+SPACY_MODEL = 'en_core_web_md'
+
+# Reading speed and line constraints
+MAX_READING_SPEED = 20  # Characters per second
 MAX_LINE_LENGTH = 42
-MIN_DURATION = 1
-MAX_DURATION = 6
 
-DEBUG = False  # Set to True to enable debug logging
+# Duration constraints
+MIN_DURATION = 1  # Minimum duration in seconds
+MAX_DURATION = 6  # Maximum duration in seconds
 
 try:
     nlp = spacy.load(SPACY_MODEL)
 except OSError:
-    print(f'Downloading language model {SPACY_MODEL} for the spaCy POS tagger\n'
-          "(don't worry, this will only happen once)")
-    from spacy.cli import download
+    logging.warning(f'Downloading language model {SPACY_MODEL} for the spaCy POS tagger. '
+                    "Don't worry, this will only happen once.")
     download(SPACY_MODEL)
-    nlp = spacy.load(SPACY_MODEL)
+    try:
+        nlp = spacy.load(SPACY_MODEL)
+    except OSError:
+        logging.error(f"Failed to load spaCy model {SPACY_MODEL} after downloading. Check your installation.")
+        raise
 
 logging.basicConfig(
     level=logging.DEBUG, 
@@ -35,6 +45,18 @@ logging.basicConfig(
 )
 
 def process_hyphenated_word(doc, idx, current_line_tokens):
+    """
+    Process hyphenated words in a spaCy Doc object starting from the given index.
+    
+    Parameters:
+    - doc: spaCy Doc object
+    - idx: Current index in the doc
+    - current_line_tokens: List of tokens for the current line being processed
+    
+    Returns:
+    - processed (bool): True if a hyphenated word was found and processed, False otherwise
+    - index (int): The next index to process in the doc
+    """
     if idx < len(doc) - 1 and doc[idx + 1].text == '-':
         hyphenated_tokens = [doc[idx].text + doc[idx].whitespace_]
         idx += 1  # Move to the hyphen
@@ -42,10 +64,22 @@ def process_hyphenated_word(doc, idx, current_line_tokens):
             hyphenated_tokens.append(doc[idx].text + doc[idx].whitespace_)
             idx += 1
         current_line_tokens.extend(hyphenated_tokens)
-        return True, idx  # Return True indicating a hyphenated word was found, and the next idx
+        return True, idx
     return False, idx
 
-def process_contraction(doc, idx, current_line_tokens, max_line_length):
+def process_contraction(doc, idx, current_line_tokens):
+    """
+    Process contractions in a spaCy Doc object starting from the given index.
+    
+    Parameters:
+    - doc: spaCy Doc object
+    - idx: Current index in the doc
+    - current_line_tokens: List of tokens for the current line being processed
+    
+    Returns:
+    - moved_to_new_line (bool): True if the contraction was moved to a new line, False otherwise
+    - index (int): The next index to process in the doc
+    """
     initial_idx = idx
     token_text = doc[idx].text
     contraction_tokens = [token_text + doc[idx].whitespace_]
@@ -57,16 +91,25 @@ def process_contraction(doc, idx, current_line_tokens, max_line_length):
     combined_text = ''.join(contraction_tokens)
     prospective_line_with_contraction = ''.join(current_line_tokens) + combined_text
     
-    if len(prospective_line_with_contraction) <= max_line_length:
+    if len(prospective_line_with_contraction) <= MAX_LINE_LENGTH:
         current_line_tokens.extend(contraction_tokens)
         return False, idx  # False indicates the contraction wasn't moved to a new line
     
     return True, initial_idx  # True indicates the contraction was moved to a new line
 
-def get_intelligent_breakpoints(phrase, max_line_length=42):
+def get_intelligent_breakpoints(phrase):
+    """
+    Splits a given phrase into lines based on certain conditions and a maximum line length.
+    
+    Parameters:
+    - phrase: The text phrase to split
+    
+    Returns:
+    A list of lines resulting from the intelligent splitting of the phrase.
+    """
     phrase = phrase.strip()
     doc = nlp(phrase)
-    current_line_tokens = []  # To keep track of the current line as tokens
+    current_line_tokens = []
     lines = []
     idx = 0
 
@@ -77,24 +120,22 @@ def get_intelligent_breakpoints(phrase, max_line_length=42):
         # Check for hyphenated words
         hyphen_found, new_idx = process_hyphenated_word(doc, idx, current_line_tokens)
         if hyphen_found:
-            idx = new_idx  # Adjust idx based on the returned value from process_hyphenated_word
+            idx = new_idx
             continue
 
         # Check for contractions using apostrophes
         if idx < len(doc) - 1 and "'" in doc[idx + 1].text:
-            moved_to_next_line, idx = process_contraction(doc, idx, current_line_tokens, max_line_length)
-
+            moved_to_next_line, idx = process_contraction(doc, idx, current_line_tokens)
             if moved_to_next_line:
                 if current_line_tokens:
                     lines.append(''.join(current_line_tokens).strip())
                 current_line_tokens = [token_text + token.whitespace_]
-            idx += 1  # Move to the next token after processing the contraction
+            idx += 1
         else:
-            # Prepare a prospective line addition
             prospective_line_tokens = current_line_tokens + [token_text + token.whitespace_]
             prospective_line = ''.join(prospective_line_tokens).strip()
 
-            if len(prospective_line) <= max_line_length or token.dep_ == "punct":
+            if len(prospective_line) <= MAX_LINE_LENGTH or token.dep_ == "punct":
                 current_line_tokens.append(token_text + token.whitespace_)
                 idx += 1
             else:
@@ -106,26 +147,34 @@ def get_intelligent_breakpoints(phrase, max_line_length=42):
     if current_line_tokens:
         lines.append(''.join(current_line_tokens).strip())
 
-    # Ensure that there are at most 2 lines
     while len(lines) > 2:
         lines[-2] += ' ' + lines[-1]
         del lines[-1]
         
-    return [lines] if lines else []
+    return lines
     
-def create_and_add_subtitle(lines, start_time, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start=None):    
-    # Flatten list of lists into single list of strings
-    flattened_lines = [item for sublist in lines for item in sublist]
+def create_adjusted_subtitle(lines, start_time, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start=None):    
+    """
+    Creates a new adjusted subtitle and appends it to the new_subs list.
+
+    Args:
+    - lines (list): List of subtitle lines.
+    - start_time (SubRipTime): Start time for the subtitle.
+    - ... (Other arguments)
+    
+    Returns:
+    - SubRipTime: New end time.
+    """
     
     # Join lines together, but ensure that there are at most 2 lines
-    phrase = "\n".join(flattened_lines)
+    phrase = "\n".join(lines)
     split_phrase = phrase.split('\n')
     while len(split_phrase) > 2:
         split_phrase[-2] += ' ' + split_phrase[-1]
         del split_phrase[-1]
     phrase = "\n".join(split_phrase)
     
-    # calculate duration based on phrase length
+    # Calculate duration based on phrase length
     duration_seconds = max(min(len(phrase) / MAX_READING_SPEED, MAX_DURATION), MIN_DURATION)
     duration_milliseconds = duration_seconds * 1000
     new_end = start_time + pysrt.SubRipTime(milliseconds=duration_milliseconds)
@@ -146,15 +195,37 @@ def create_and_add_subtitle(lines, start_time, new_subs, unique_new_subtitles, o
 
     orig_to_new_subs[i].append(new_sub.text)
 
-    # return the new end time
+    # Return the new end time
     return new_end + pysrt.SubRipTime(milliseconds=1)
 
-def integrity_check(original_text, adjusted_text):
+def integrity_check(original_text, adjusted_text, check_mode='immediate'):
+    """
+    Compares original and adjusted texts for equality based on the chosen check mode.
+
+    Args:
+    - original_text (str): The original text string.
+    - adjusted_text (str): The adjusted text string.
+    - check_mode (str): Type of integrity check - 'immediate' or 'detailed'. Default is 'immediate'.
+
+    Returns:
+    - bool: True if the texts match, otherwise False.
+    """
+    
     original_words = original_text.split()
     adjusted_words = adjusted_text.split()
 
-    if original_words != adjusted_words:
-        for i, (original_word, adjusted_word) in enumerate(zip(original_words, adjusted_words)):
+    if check_mode == 'immediate':
+        # Immediate check by comparing word lengths
+        if len(original_words) != len(adjusted_words):
+            logging.error("Integrity check failed: Word counts between original and adjusted texts do not match.")
+            return False
+        else:
+            logging.info("Integrity check passed: Original and adjusted texts match.")
+            return True
+
+    elif check_mode == 'detailed':
+        # Detailed word-by-word comparison
+        for i, (original_word, adjusted_word) in enumerate(zip_longest(original_words, adjusted_words)):
             if original_word != adjusted_word:
                 context_range = 5  # Number of words to include before and after the mismatch
                 original_context = original_words[max(i - context_range, 0):min(i + context_range + 1, len(original_words))]
@@ -163,63 +234,62 @@ def integrity_check(original_text, adjusted_text):
                 logging.error(f"Original context: {' '.join(original_context)}")
                 logging.error(f"Adjusted context: {' '.join(adjusted_context)}")
                 return False
-        if len(original_words) > len(adjusted_words):
-            logging.error(f"Integrity check failed: Original text has additional words: {original_words[len(adjusted_words):]}")
-            return False
-        elif len(adjusted_words) > len(original_words):
-            logging.error(f"Integrity check failed: Adjusted text has additional words: {adjusted_words[len(original_words):]}")
-            return False
-    else:
         logging.info("Integrity check passed: Original and adjusted texts match.")
         return True
 
-def split_and_adjust_subtitles(input_file_path):    
-    orig_subs = pysrt.open(input_file_path)
-    new_subs = []
+    else:
+        logging.error(f"Invalid check_mode '{check_mode}'. Please use 'immediate' or 'detailed'.")
+        return False
+
+def split_and_adjust_subtitles(input_file_path):
+    """Adjusts the subtitles from the provided file based on predefined rules.
+
+    Args:
+    - input_file_path (str): Path to the original subtitle file.
+
+    Returns:
+    - tuple: Path to the adjusted subtitle file and a mapping from original to new subtitles.
+    """
+    
+    original_subtitles = pysrt.open(input_file_path)
+    new_subtitles = []
     unique_new_subtitles = set()
-    orig_to_new_subs = defaultdict(list)
+    original_to_new_mapping = defaultdict(list)
     
     # Collect Original Text
-    original_text = " ".join(sub.text for sub in orig_subs)
+    original_text = " ".join(sub.text for sub in original_subtitles)
 
-    for i, sub in enumerate(orig_subs):
-        # Process the entire subtitle text
-        phrase = sub.text.replace('\n', ' ').strip()
+    for idx, subtitle in enumerate(original_subtitles):
+        phrase = subtitle.text.replace('\n', ' ').strip()
+        lines = get_intelligent_breakpoints(phrase)
         
-        lines = get_intelligent_breakpoints(phrase, MAX_LINE_LENGTH)
-        
-        original_start = sub.start
-        next_sub_start = orig_subs[i+1].start if i < len(orig_subs) - 1 else None
+        start_time = subtitle.start
+        next_start_time = original_subtitles[idx+1].start if idx < len(original_subtitles) - 1 else None
 
         # Process the lines generated from the subtitle
         if lines:
-            original_start = create_and_add_subtitle(lines, original_start, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start)
+            start_time = create_adjusted_subtitle(lines, start_time, new_subtitles, unique_new_subtitles, original_to_new_mapping, subtitle, idx, next_start_time)
 
     # Collect Adjusted Text
-    adjusted_text = " ".join(new_sub.text for new_sub in new_subs)
+    adjusted_text = " ".join(new_sub.text for new_sub in new_subtitles)
 
     # Run the integrity check
-    if not integrity_check(original_text, adjusted_text):
-        logging.error("Integrity check failed: Original and adjusted texts do not match.")
-    else:
-        logging.info("Integrity check passed: Original and adjusted texts match.")
-
-    # Save the adjusted subtitles
-    subs = pysrt.SubRipFile(items=new_subs)
-    output_file_path = os.path.splitext(input_file_path)[0] + '.adjusted.srt'
-    subs.save(output_file_path, encoding='utf-8')
-
-    logging.debug(f'[END] split_and_adjust_subtitles')
-    return output_file_path, orig_to_new_subs
+    integrity_check(original_text, adjusted_text, 'detailed')
     
+    output_path = os.path.splitext(input_file_path)[0] + '.adjusted.srt'
+    adjusted_subtitles = pysrt.SubRipFile(items=new_subtitles)
+    adjusted_subtitles.save(output_path, encoding='utf-8')
+
+    return output_path, original_to_new_mapping
+    
+def main():
+    parser = argparse.ArgumentParser(description='Adjust the subtitles of a given file.')
+    parser.add_argument('input_file_path', type=str, help='Path to the subtitle file (.srt)')
+
+    args = parser.parse_args()
+    output_path, _ = split_and_adjust_subtitles(args.input_file_path)
+    
+    print(f"Adjusted subtitles saved to: {output_path}")
+
 if __name__ == "__main__":
-    # Check if command line argument is provided
-    if len(sys.argv) < 2:
-        print("Usage: python subtitle_processor.py /path/to/subtitle/file.srt")
-        sys.exit(1)
-
-    # Get the path to the .srt file from the command line arguments
-    input_file_path = sys.argv[1]
-
-    # Call the function to adjust the subtitles
-    split_and_adjust_subtitles(input_file_path)
+    main()

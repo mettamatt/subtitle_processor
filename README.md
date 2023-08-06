@@ -1,48 +1,53 @@
 # Subtitle Processor
 
-Subtitle Processor is a Python script that processes subtitle files in the SubRip Text format (`.srt`). It adjusts the timing and line breaks of the subtitles to make them easier to read. 
+Subtitle Processor is a Python script that processes an English subtitle file in the SubRip Text format (`.srt`). It adjusts the line breaks of the subtitles to make them easier to read. 
+
 
 ## Overview
 
-The script works by loading a language model from the `spacy` library to analyze the text of the subtitles. It then processes each subtitle, splits sentences into lines, and adjusts the timing of each subtitle. The new subtitles are saved to a new `.srt` file with the same name as the original file, but with `.adjusted` added before the file extension.
+This tool helps in refining the phrasing, splitting, and handling of hyphenated words and contractions. It is important to note that the script assumes the timings in the original subtitles are correct. The adjusted subtitles are then saved to a new file with an `.adjusted.srt` extension.
 
-## Constants
+## Features
 
-The script defines the following constants:
-
-- `MAX_READING_SPEED`: The maximum reading speed in characters per second. Used to calculate the duration of each subtitle.
-- `MAX_LINE_LENGTH`: The maximum length of a line of subtitle text.
-- `MIN_DURATION`: The minimum duration of a subtitle in seconds.
-- `MAX_DURATION`: The maximum duration of a subtitle in seconds.
-- `DEBUG`: A boolean variable that enables or disables debug logging. When set to `True`, the script logs additional information about its operation.
-
-## Functions
-
-The script uses the following functions:
-
-- `get_intelligent_breakpoints(phrase, max_line_length)`: Takes a phrase and breaks it into lines, considering the maximum line length and the structure of the language.
-- `create_and_add_subtitle(phrase, start_time, new_subs, unique_new_subtitles, orig_to_new_subs, sub, i, next_sub_start)`: Creates a new subtitle with adjusted timing and adds it to the list of new subtitles, avoiding duplicate subtitles.
-- `split_and_adjust_subtitles(input_file_path)`: The main function that opens the original subtitle file, processes each subtitle, splits sentences into lines, and adjusts the timing of each subtitle.
+- Handles hyphenated words and contractions smartly.
+- Adjusts subtitle lines based on predefined reading speed and maximum line length.
+- Ensures each subtitle stays on the screen for a readable amount of time.
+- Performs an integrity check to ensure word counts between original and adjusted texts match.
 
 ## Requirements
 
-The script requires the following Python libraries:
+The script depends on a few Python libraries. Install the necessary requirements using:
 
-- `pysrt==1.1.2`: A Python library for editing .srt files.
-- `spacy==3.6.0`: A library for advanced Natural Language Processing in Python.
+```bash
+pip install -r requirements.txt
+```
 
-These dependencies can be installed by running the command `pip install -r requirements.txt` in your terminal, in the same directory as the `requirements.txt` file.
+### Content of `requirements.txt`
+
+```
+pysrt==1.1.2
+spacy==3.6.0
+```
 
 ## Usage
 
-To use the script, run it as follows:
+1. Navigate to the repository:
 
 ```bash
-python subtitle_processor.py /path/to/subtitle/file.srt
+cd subtitle_processor
 ```
 
-Replace `/path/to/subtitle/file.srt` with the path to the `.srt` file that you want to process.
+2. Run the script:
 
-## License
+```bash
+python subtitle_processor.py <path_to_subtitle_file>
+```
 
-This project is licensed under the terms of the MIT license. See the `LICENSE` file for details.
+Replace `<path_to_subtitle_file>` with the path to your `.srt` file.
+
+Upon successful completion, you will see a message indicating the path to the adjusted subtitle file.
+
+## Limitations
+
+- The script currently supports only English subtitles.
+- The tool assumes the timings in the original subtitle file are accurate and does not adjust them.
