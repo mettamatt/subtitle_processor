@@ -17,7 +17,7 @@ SPACY_MODEL = 'en_core_web_md'
 
 # Reading speed and line constraints
 MAX_READING_SPEED = 20  # Characters per second
-MAX_LINE_LENGTH = 42
+MAX_LINE_LENGTH = 42  # Character length
 
 # Duration constraints
 MIN_DURATION = 1  # Minimum duration in seconds
